@@ -26,23 +26,6 @@ class AuthSubmitController extends AutoDisposeNotifier<bool> {
     }
   }
 
-  Future<void> signup({
-    required String fullName,
-    required String email,
-    required String password,
-  }) async {
-    state = true;
-    try {
-      await ref.read(authRepositoryProvider).signup(
-            fullName: fullName,
-            email: email,
-            password: password,
-          );
-    } finally {
-      state = false;
-    }
-  }
-
   Future<AuthResponse> requestOtp({
     required String phoneNumber,
   }) async {
@@ -50,6 +33,21 @@ class AuthSubmitController extends AutoDisposeNotifier<bool> {
     try {
       return await ref.read(authRepositoryProvider).requestOtp(
             phoneNumber: phoneNumber,
+          );
+    } finally {
+      state = false;
+    }
+  }
+
+  Future<void> verifyOtp({
+    required String phoneNumber,
+    required String otp,
+  }) async {
+    state = true;
+    try {
+      await ref.read(authRepositoryProvider).verifyOtp(
+            phoneNumber: phoneNumber,
+            otp: otp,
           );
     } finally {
       state = false;

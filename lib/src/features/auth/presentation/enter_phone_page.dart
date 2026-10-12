@@ -27,7 +27,7 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
   final _formKey = GlobalKey<FormState>();
   final _phoneController = TextEditingController();
   final _otpController = TextEditingController();
-  String? _serverOtp;
+  bool _otpRequested = false;
 
   @override
   void initState() {
@@ -53,8 +53,7 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
     FocusScope.of(context).unfocus();
 
     try {
-      final result =
-          await ref.read(authSubmitControllerProvider.notifier).requestOtp(
+      await ref.read(authSubmitControllerProvider.notifier).requestOtp(
                 phoneNumber: _phoneController.text.trim(),
               );
 
@@ -63,16 +62,13 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
       }
 
       setState(() {
-        _serverOtp = result.otp;
+        _otpRequested = true;
       });
 
-      final otp = result.otp;
-      final message = otp == null || otp.isEmpty
-          ? 'Verification code sent. Enter the code to continue.'
-          : 'Verification code sent. Use OTP $otp to continue.';
-
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
+        const SnackBar(
+          content: Text('Verification code sent. Enter the code to continue.'),
+        ),
       );
     } on AuthException catch (error) {
       if (!mounted) {
@@ -85,8 +81,7 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
   }
 
   Future<void> _verifyAndContinue() async {
-    final otp = _serverOtp;
-    if (otp == null || otp.isEmpty) {
+    if (!_otpRequested) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Request an OTP first')),
       );
@@ -94,7 +89,7 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
     }
 
     final enteredOtp = _otpController.text.replaceAll(RegExp(r'\D'), '');
-    if (enteredOtp != otp) {
+    if (enteredOtp.length != 4) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Incorrect OTP')),
       );
@@ -110,6 +105,10 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
     }
 
     try {
+      await ref.read(authSubmitControllerProvider.notifier).verifyOtp(
+            phoneNumber: _phoneController.text.trim(),
+            otp: enteredOtp,
+          );
       await ref.read(authSubmitControllerProvider.notifier).completeSignup(
             signup: pendingSignup,
             phoneNumber: _phoneController.text.trim(),
@@ -133,12 +132,12 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
   @override
   Widget build(BuildContext context) {
     final isBusy = ref.watch(authSubmitControllerProvider);
-    final hasOtp = _serverOtp != null && _serverOtp!.isNotEmpty;
+    final hasOtp = _otpRequested;
 
     return AuthShell(
       title: hasOtp ? 'Verify your number' : 'Phone verification',
       subtitle: hasOtp
-          ? 'Enter the 6-digit code sent to +255 ${_phoneController.text.trim()}.'
+          ? 'Enter the 4-digit code sent to +255 ${_phoneController.text.trim()}.'
           : 'Enter your phone number to receive a one-time code and finish account setup.',
       child: Form(
         key: _formKey,
@@ -171,13 +170,13 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
             if (hasOtp) ...[
               _OtpInputField(
                 controller: _otpController,
-                hintText: '6-digit code',
+                hintText: '4-digit code',
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.done,
                 autofillHints: const [AutofillHints.oneTimeCode],
                 inputFormatters: [
                   FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(6),
+                  LengthLimitingTextInputFormatter(4),
                 ],
                 onFieldSubmitted: (_) => _verifyAndContinue(),
               ),

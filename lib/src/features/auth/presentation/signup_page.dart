@@ -53,29 +53,10 @@ class _SignupPageState extends ConsumerState<SignupPage> {
       password: _passwordController.text,
     );
 
-    try {
-      await ref.read(authSubmitControllerProvider.notifier).signup(
-            fullName: signup.fullName,
-            email: signup.email,
-            password: signup.password,
-          );
-
-      if (!mounted) {
-        return;
-      }
-
-      context.push(
-        EnterPhonePage.routePath,
-        extra: signup.copyWithPhone(_phoneController.text.trim()),
-      );
-    } on AuthException catch (error) {
-      if (!mounted) {
-        return;
-      }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.message)),
-      );
-    }
+    context.push(
+      EnterPhonePage.routePath,
+      extra: signup.copyWithPhone(_phoneController.text.trim()),
+    );
   }
 
   @override

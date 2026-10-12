@@ -22,25 +22,6 @@ class AuthRepository {
   final Dio _dio;
   final SessionStorage sessionStorage;
 
-  Future<void> signup({
-    required String fullName,
-    required String email,
-    required String password,
-  }) async {
-    final data = await _postAuth(
-      'api/signup',
-      {
-        'full_name': fullName,
-        'email': email,
-        'password': password,
-      },
-    );
-
-    if (!data.isSuccess) {
-      throw AuthException(data.message);
-    }
-  }
-
   Future<AuthResponse> requestOtp({
     required String phoneNumber,
   }) async {
@@ -56,6 +37,23 @@ class AuthRepository {
     }
 
     return data;
+  }
+
+  Future<void> verifyOtp({
+    required String phoneNumber,
+    required String otp,
+  }) async {
+    final data = await _postAuth(
+      'api/verifyotp',
+      {
+        'phone_number': phoneNumber,
+        'otp': otp,
+      },
+    );
+
+    if (!data.isSuccess) {
+      throw AuthException(data.message);
+    }
   }
 
   Future<void> login({
@@ -82,9 +80,10 @@ class AuthRepository {
     required PendingSignup signup,
     required String phoneNumber,
   }) async {
-    final data = await _postAuth(
-      'api/signIn',
+    final created = await _postAuth(
+      'api/signup',
       {
+        'full_name': signup.fullName,
         'email': signup.email,
         'password': signup.password,
         'phone_number': phoneNumber,
@@ -92,12 +91,11 @@ class AuthRepository {
       },
     );
 
-    if (!data.isSuccess) {
-      throw AuthException(data.message);
+    if (!created.isSuccess) {
+      throw AuthException(created.message);
     }
 
-    await _saveSession(data);
-    await _pushSignIn(token: data.token, userId: data.userId);
+    await login(email: signup.email, password: signup.password);
   }
 
   Future<AuthResponse> _postAuth(
