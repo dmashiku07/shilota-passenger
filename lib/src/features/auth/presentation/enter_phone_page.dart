@@ -89,7 +89,7 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
     }
 
     final enteredOtp = _otpController.text.replaceAll(RegExp(r'\D'), '');
-    if (enteredOtp.length != 4) {
+    if (enteredOtp.length != 6) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Incorrect OTP')),
       );
@@ -137,7 +137,7 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
     return AuthShell(
       title: hasOtp ? 'Verify your number' : 'Phone verification',
       subtitle: hasOtp
-          ? 'Enter the 4-digit code sent to +255 ${_phoneController.text.trim()}.'
+          ? 'Enter the 6-digit code sent to +255 ${_phoneController.text.trim()}.'
           : 'Enter your phone number to receive a one-time code and finish account setup.',
       child: Form(
         key: _formKey,
@@ -170,13 +170,13 @@ class _EnterPhonePageState extends ConsumerState<EnterPhonePage> {
             if (hasOtp) ...[
               _OtpInputField(
                 controller: _otpController,
-                hintText: '4-digit code',
+                hintText: '6-digit code',
                 keyboardType: TextInputType.number,
                 textInputAction: TextInputAction.done,
                 autofillHints: const [AutofillHints.oneTimeCode],
                 inputFormatters: [
                   FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(4),
+                  LengthLimitingTextInputFormatter(6),
                 ],
                 onFieldSubmitted: (_) => _verifyAndContinue(),
               ),
