@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/config/app_config.dart';
 import '../data/account_repository.dart';
@@ -25,6 +26,7 @@ class _SosPageState extends ConsumerState<SosPage> {
   bool _isSending = false;
   Position? _position;
   AdminData? _adminData;
+  List<EmergencyContact> _emergencyContacts = const <EmergencyContact>[];
 
   @override
   void dispose() {
@@ -39,8 +41,17 @@ class _SosPageState extends ConsumerState<SosPage> {
   }
 
   Future<void> _bootstrap() async {
-    await _loadAdminData();
+    await Future.wait<void>([_loadAdminData(), _loadEmergencyContacts()]);
     await _loadPosition();
+  }
+
+  Future<void> _loadEmergencyContacts() async {
+    try {
+      final profile = await ref.read(accountRepositoryProvider).getProfile();
+      if (mounted) {
+        setState(() => _emergencyContacts = profile.emergencyContacts);
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadAdminData() async {
@@ -79,7 +90,7 @@ class _SosPageState extends ConsumerState<SosPage> {
     } catch (_) {}
   }
 
-  Future<void> _sendAlert({
+  Future<bool> _sendAlert({
     required String actionType,
     required String message,
     required String contactTarget,
@@ -89,7 +100,7 @@ class _SosPageState extends ConsumerState<SosPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Current location is unavailable')),
       );
-      return;
+      return false;
     }
 
     setState(() => _isSending = true);
@@ -107,22 +118,94 @@ class _SosPageState extends ConsumerState<SosPage> {
             ),
           );
       if (!mounted) {
-        return;
+        return true;
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Emergency Alert sent')),
       );
+      return true;
     } catch (error) {
       if (!mounted) {
-        return;
+        return false;
       }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('$error')),
       );
+      return false;
     } finally {
       if (mounted) {
         setState(() => _isSending = false);
       }
+    }
+  }
+
+  Future<void> _openDialer(String number) async {
+    final normalized = number.trim();
+    if (normalized.isEmpty) {
+      _showMessage('No emergency number has been configured yet.');
+      return;
+    }
+    final launched = await launchUrl(
+      Uri(scheme: 'tel', path: normalized),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched && mounted) {
+      _showMessage('Unable to open the phone dialer.');
+    }
+  }
+
+  void _showMessage(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
+
+  Future<void> _callPolice() async {
+    final number =
+        _adminData?.emergencyContact?.trim() ?? AppConfig.emergencyContact;
+    final sent = await _sendAlert(
+      actionType: 'police',
+      message: 'Rider opened police emergency call',
+      contactTarget: number,
+    );
+    if (sent) {
+      await _openDialer(number);
+    }
+  }
+
+  Future<void> _selectAndCallEmergencyContact() async {
+    if (_emergencyContacts.isEmpty) {
+      _showMessage('Add an emergency contact before making an emergency call.');
+      return;
+    }
+    final selected = await showModalBottomSheet<EmergencyContact>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: <Widget>[
+            const ListTile(title: Text('Call emergency contact')),
+            ..._emergencyContacts.map((contact) => ListTile(
+                  leading: const Icon(Icons.phone_in_talk_rounded),
+                  title: Text(contact.name ?? 'Emergency contact'),
+                  subtitle: Text(contact.phoneNumber ?? ''),
+                  onTap: () => Navigator.of(sheetContext).pop(contact),
+                )),
+          ],
+        ),
+      ),
+    );
+    if (selected == null) {
+      return;
+    }
+    final sent = await _sendAlert(
+      actionType: 'emergency_contact',
+      message: 'Rider opened emergency contact call',
+      contactTarget: selected.phoneNumber ?? '',
+    );
+    if (sent) {
+      await _openDialer(selected.phoneNumber ?? '');
     }
   }
 
@@ -180,30 +263,14 @@ class _SosPageState extends ConsumerState<SosPage> {
             subtitle: (_adminData?.emergencyContact?.trim().isNotEmpty ?? false)
                 ? 'Emergency line: ${_adminData!.emergencyContact}'
                 : 'Alert operations and police support',
-            onTap: _isSending
-                ? null
-                : () => _sendAlert(
-                      actionType: 'police',
-                      message: 'Rider called police control room',
-                      contactTarget:
-                          (_adminData?.emergencyContact?.trim().isNotEmpty ??
-                                  false)
-                              ? _adminData!.emergencyContact!.trim()
-                              : AppConfig.emergencyContact,
-                    ),
+            onTap: _isSending ? null : _callPolice,
           ),
           const SizedBox(height: 12),
           _SosActionTile(
             icon: Icons.people_alt_outlined,
-            title: 'Alert emergency contacts',
-            subtitle: 'Send an emergency alert to your saved contacts',
-            onTap: _isSending
-                ? null
-                : () => _sendAlert(
-                      actionType: 'emergency_contact',
-                      message: 'Rider alerted emergency contacts',
-                      contactTarget: 'emergency_contacts',
-                    ),
+            title: 'Call emergency contact',
+            subtitle: 'Choose a saved contact and open the phone dialer',
+            onTap: _isSending ? null : _selectAndCallEmergencyContact,
           ),
           const SizedBox(height: 18),
           if (_position != null)
