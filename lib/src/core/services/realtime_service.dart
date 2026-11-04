@@ -39,8 +39,11 @@ class RealtimeService {
   final _rtcMessageController =
       StreamController<Map<String, dynamic>>.broadcast();
   final _byeController = StreamController<String>.broadcast();
+  final _driverLocationController =
+      StreamController<DriverLocationUpdate>.broadcast();
   final Set<String> _joinedCallRooms = <String>{};
   final Set<String> _readyCallRooms = <String>{};
+  final Set<String> _watchedRideLocations = <String>{};
   final List<Map<String, dynamic>> _pendingRtcMessages =
       <Map<String, dynamic>>[];
 
@@ -50,6 +53,8 @@ class RealtimeService {
   Stream<String> get callReady => _callReadyController.stream;
   Stream<Map<String, dynamic>> get rtcMessages => _rtcMessageController.stream;
   Stream<String> get callBye => _byeController.stream;
+  Stream<DriverLocationUpdate> get driverLocations =>
+      _driverLocationController.stream;
 
   io.Socket? get socket => _socket;
 
@@ -120,6 +125,9 @@ class RealtimeService {
         socket.emit('rtcmessage', message);
       }
       _pendingRtcMessages.clear();
+      for (final rideId in _watchedRideLocations) {
+        _emitRideLocationWatch(socket, rideId);
+      }
       _connecting = false;
       if (!connectCompleter.isCompleted) {
         connectCompleter.complete();
@@ -184,6 +192,12 @@ class RealtimeService {
         _byeController.add(roomId);
       }
     });
+    socket.on('ride-driver-location', (payload) {
+      final update = DriverLocationUpdate.fromJson(_asMap(payload));
+      if (update != null) {
+        _driverLocationController.add(update);
+      }
+    });
     socket.onDisconnect((_) {
       if (identical(_socket, socket)) {
         _socket = null;
@@ -244,6 +258,41 @@ class RealtimeService {
     });
   }
 
+  void watchRideLocation(String rideId) {
+    final normalizedRideId = rideId.trim();
+    if (normalizedRideId.isEmpty) {
+      return;
+    }
+    _watchedRideLocations.add(normalizedRideId);
+    final socket = _socket;
+    if (socket?.connected == true) {
+      _emitRideLocationWatch(socket!, normalizedRideId);
+    }
+  }
+
+  void unwatchRideLocation(String rideId) {
+    final normalizedRideId = rideId.trim();
+    if (normalizedRideId.isEmpty) {
+      return;
+    }
+    _watchedRideLocations.remove(normalizedRideId);
+    _socket?.emit('unwatch-ride-location', <String, dynamic>{
+      'ride_id': normalizedRideId,
+      'auth_token': sessionStorage.token,
+    });
+  }
+
+  void _emitRideLocationWatch(io.Socket socket, String rideId) {
+    final token = sessionStorage.token?.trim() ?? '';
+    if (token.isEmpty) {
+      return;
+    }
+    socket.emit('watch-ride-location', <String, dynamic>{
+      'ride_id': rideId,
+      'auth_token': token,
+    });
+  }
+
   Map<String, dynamic> _asMap(dynamic value) {
     if (value is Map<String, dynamic>) {
       return value;
@@ -269,5 +318,32 @@ class RealtimeService {
     _callReadyController.close();
     _rtcMessageController.close();
     _byeController.close();
+    _driverLocationController.close();
+  }
+}
+
+class DriverLocationUpdate {
+  const DriverLocationUpdate({
+    required this.rideId,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  final String rideId;
+  final double latitude;
+  final double longitude;
+
+  static DriverLocationUpdate? fromJson(Map<String, dynamic> json) {
+    final rideId = json['ride_id']?.toString().trim() ?? '';
+    final latitude = double.tryParse(json['lat']?.toString() ?? '');
+    final longitude = double.tryParse(json['lng']?.toString() ?? '');
+    if (rideId.isEmpty || latitude == null || longitude == null) {
+      return null;
+    }
+    return DriverLocationUpdate(
+      rideId: rideId,
+      latitude: latitude,
+      longitude: longitude,
+    );
   }
 }

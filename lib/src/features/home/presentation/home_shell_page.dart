@@ -94,10 +94,16 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
   bool _isRefreshingOffers = false;
   String _activeRideStatus = '';
   int _requestGeneration = 0;
+  LatLng? _assignedDriverLatLng;
+  StreamSubscription<DriverLocationUpdate>? _driverLocationSubscription;
 
   @override
   void initState() {
     super.initState();
+    _driverLocationSubscription =
+        ref.read(realtimeServiceProvider).driverLocations.listen(
+              _onDriverLocationUpdate,
+            );
     Future<void>.microtask(() async {
       // App bootstrap may run before authentication and skip its first socket
       // connection. Retry here, once the signed-in passenger reaches Home.
@@ -170,6 +176,7 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
                 : 'Waiting for a driver to accept your ride.';
       });
       if (ride.isAccepted) {
+        _watchAssignedDriverLocation(onrideId);
         _startRideStatusMonitoring();
       } else if (ride.hasDriverOffers) {
         _startOfferMonitoring();
@@ -195,6 +202,11 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
 
   @override
   void dispose() {
+    _driverLocationSubscription?.cancel();
+    final activeRideId = _onrideId;
+    if (activeRideId != null) {
+      ref.read(realtimeServiceProvider).unwatchRideLocation(activeRideId);
+    }
     _rideStatusTimer?.cancel();
     _offerRefreshTimer?.cancel();
     _pickupController.dispose();
@@ -204,6 +216,19 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
     _dropoffFocus.dispose();
     _mapController?.dispose();
     super.dispose();
+  }
+
+  void _watchAssignedDriverLocation(String rideId) {
+    ref.read(realtimeServiceProvider).watchRideLocation(rideId);
+  }
+
+  void _onDriverLocationUpdate(DriverLocationUpdate update) {
+    if (!mounted || update.rideId != _onrideId) {
+      return;
+    }
+    setState(() {
+      _assignedDriverLatLng = LatLng(update.latitude, update.longitude);
+    });
   }
 
   Future<void> _bootstrapLocation() async {
@@ -891,6 +916,7 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
         await _moveCameraToBounds(_pickupLatLng!, _dropoffLatLng!);
       }
       if (accepted.isAccepted) {
+        _watchAssignedDriverLocation(request.onrideId!);
         _startRideStatusMonitoring();
       }
     } catch (error) {
@@ -1013,10 +1039,12 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
           _statusMessage = 'Your driver is on the way to the pickup.';
         } else if (rideStatus == 'completed') {
           _rideStatusTimer?.cancel();
+          ref.read(realtimeServiceProvider).unwatchRideLocation(onrideId);
           _clearBookingDraft('Choose your destination to start a new ride.');
         } else if (rideStatus == 'cancelled' ||
             rideStatus == 'ridenotaccepted') {
           _rideStatusTimer?.cancel();
+          ref.read(realtimeServiceProvider).unwatchRideLocation(onrideId);
           _acceptedRide = null;
           _onrideId = null;
           _routePolylinePoints = const <LatLng>[];
@@ -1043,6 +1071,10 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
   }
 
   void _clearBookingDraft(String message) {
+    final activeRideId = _onrideId;
+    if (activeRideId != null) {
+      ref.read(realtimeServiceProvider).unwatchRideLocation(activeRideId);
+    }
     _pickupController.clear();
     _dropoffController.clear();
     _passengerPriceController.clear();
@@ -1076,6 +1108,7 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
     _isFetchingQuotes = false;
     _isRefreshingOffers = false;
     _onrideId = null;
+    _assignedDriverLatLng = null;
     _activeRideStatus = '';
     _statusMessage = message;
   }
@@ -1106,6 +1139,7 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
         _isFindingDriver = false;
         _statusMessage = 'Driver accepted your ride.';
       });
+      _watchAssignedDriverLocation(onrideId);
       _startRideStatusMonitoring();
       if (_pickupLatLng != null && _dropoffLatLng != null) {
         await Future<void>.delayed(const Duration(milliseconds: 150));
@@ -1291,6 +1325,22 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
           markerId: const MarkerId('dropoff'),
           position: _dropoffLatLng!,
           infoWindow: const InfoWindow(title: 'Destination'),
+        ),
+      );
+    }
+    if (_assignedDriverLatLng != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('assigned-driver'),
+          position: _assignedDriverLatLng!,
+          infoWindow: InfoWindow(
+            title: _acceptedRide?.driverName ?? 'Your driver',
+            snippet: _acceptedRide?.driverVehicleNo ?? 'Driver location',
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+            BitmapDescriptor.hueAzure,
+          ),
+          zIndexInt: 3,
         ),
       );
     }
@@ -2439,6 +2489,7 @@ class _AcceptedRideCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tripStarted = rideStatus == 'onride';
+    final driverImageUrl = ride.driverImage?.trim() ?? '';
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
       decoration: BoxDecoration(
@@ -2451,14 +2502,19 @@ class _AcceptedRideCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const CircleAvatar(
+              CircleAvatar(
                 radius: 21,
-                backgroundColor: Color(0xFFFCE7E1),
-                child: Icon(
-                  Icons.person_rounded,
-                  size: 22,
-                  color: Color(0xFFF04E29),
-                ),
+                backgroundColor: const Color(0xFFFCE7E1),
+                backgroundImage: driverImageUrl.isEmpty
+                    ? null
+                    : NetworkImage(driverImageUrl),
+                child: driverImageUrl.isEmpty
+                    ? const Icon(
+                        Icons.person_rounded,
+                        size: 22,
+                        color: Color(0xFFF04E29),
+                      )
+                    : null,
               ),
               const SizedBox(width: 10),
               Expanded(
