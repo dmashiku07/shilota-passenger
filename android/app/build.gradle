@@ -12,7 +12,6 @@ if (localPropertiesFile.exists()) {
         localProperties.load(reader)
     }
 }
-def googleMapsApiKey = localProperties.getProperty("API_KEY", "")
 def geoapifyApiKey = localProperties.getProperty("GEOAPIFY_API_KEY", "")
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file("key.properties")
@@ -45,8 +44,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        manifestPlaceholders["API_KEY"] = googleMapsApiKey
-        buildConfigField "String", "API_KEY", "\"${googleMapsApiKey}\""
         buildConfigField "String", "GEOAPIFY_API_KEY", "\"${geoapifyApiKey}\""
     }
 
@@ -76,5 +73,4 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.4"
-    implementation "com.google.android.libraries.places:places:2.7.0"
 }

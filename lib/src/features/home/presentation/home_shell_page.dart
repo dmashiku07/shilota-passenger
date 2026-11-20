@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:intl/intl.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../../core/config/app_config.dart';
 import '../../../core/services/local_notification_service.dart';
@@ -51,7 +53,13 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
   final _pickupFocus = FocusNode();
   final _dropoffFocus = FocusNode();
 
-  GoogleMapController? _mapController;
+  static const MethodChannel _configChannel =
+      MethodChannel('shilota/app_config');
+  final MapController _mapController = MapController();
+  String? _geoapifyApiKey;
+  bool _mapReady = false;
+  LatLng? _pendingMapTarget;
+  double? _pendingMapZoom;
   Position? _currentPosition;
   LatLng? _pickupLatLng;
   LatLng? _dropoffLatLng;
@@ -105,6 +113,7 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
               _onDriverLocationUpdate,
             );
     Future<void>.microtask(() async {
+      await _loadGeoapifyMapKey();
       // App bootstrap may run before authentication and skip its first socket
       // connection. Retry here, once the signed-in passenger reaches Home.
       try {
@@ -214,7 +223,6 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
     _passengerPriceController.dispose();
     _pickupFocus.dispose();
     _dropoffFocus.dispose();
-    _mapController?.dispose();
     super.dispose();
   }
 
@@ -1190,23 +1198,29 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
     }
   }
 
+  Future<void> _loadGeoapifyMapKey() async {
+    try {
+      final key =
+          (await _configChannel.invokeMethod<String>('getGeoapifyApiKey') ?? '')
+              .trim();
+      if (key.isNotEmpty && mounted) {
+        setState(() => _geoapifyApiKey = key);
+      }
+    } catch (_) {
+      // The map renders a clear configuration message below if no key exists.
+    }
+  }
+
   Future<void> _moveCamera(LatLng target) async {
-    final controller = _mapController;
-    if (controller == null) {
+    if (!_mapReady) {
+      _pendingMapTarget = target;
+      _pendingMapZoom = 16;
       return;
     }
-    await controller.animateCamera(
-      CameraUpdate.newCameraPosition(
-        CameraPosition(target: target, zoom: 16),
-      ),
-    );
+    _mapController.move(target, 16);
   }
 
   Future<void> _moveCameraToBounds(LatLng pickup, LatLng dropoff) async {
-    final controller = _mapController;
-    if (controller == null) {
-      return;
-    }
     final points = _routePolylinePoints.isNotEmpty
         ? _routePolylinePoints
         : <LatLng>[
@@ -1224,11 +1238,22 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
       if (point.longitude < minLng) minLng = point.longitude;
       if (point.longitude > maxLng) maxLng = point.longitude;
     }
-    final bounds = LatLngBounds(
-      southwest: LatLng(minLat, minLng),
-      northeast: LatLng(maxLat, maxLng),
-    );
-    await controller.animateCamera(CameraUpdate.newLatLngBounds(bounds, 72));
+    final span = [maxLat - minLat, maxLng - minLng]
+        .reduce((left, right) => left > right ? left : right);
+    final zoom = span < 0.01
+        ? 15.5
+        : span < 0.05
+            ? 13.5
+            : span < 0.2
+                ? 11.5
+                : 9.5;
+    final target = LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2);
+    if (!_mapReady) {
+      _pendingMapTarget = target;
+      _pendingMapZoom = zoom;
+      return;
+    }
+    _mapController.move(target, zoom);
   }
 
   Future<void> _loadRoutePolyline(LatLng pickup, LatLng dropoff) async {
@@ -1291,56 +1316,59 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
     return points;
   }
 
-  Set<Polyline> _buildPolylines() {
+  List<Polyline> _buildPolylines() {
     if (_routePolylinePoints.length < 2) {
-      return const <Polyline>{};
+      return const <Polyline>[];
     }
-    return {
+    return [
       Polyline(
-        polylineId: const PolylineId('active-route'),
         points: _routePolylinePoints,
         color: const Color(0xFFF04E29),
-        width: 6,
-        startCap: Cap.roundCap,
-        endCap: Cap.roundCap,
-        jointType: JointType.round,
+        strokeWidth: 6,
       ),
-    };
+    ];
   }
 
-  Set<Marker> _buildMarkers() {
-    final markers = <Marker>{};
+  List<Marker> _buildMarkers() {
+    final markers = <Marker>[];
     if (_pickupLatLng != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId('pickup'),
-          position: _pickupLatLng!,
-          infoWindow: const InfoWindow(title: 'Pickup'),
+          point: _pickupLatLng!,
+          width: 44,
+          height: 44,
+          child: const Tooltip(
+            message: 'Pickup',
+            child: Icon(Icons.location_on_rounded,
+                color: Color(0xFFF04E29), size: 40),
+          ),
         ),
       );
     }
     if (_dropoffLatLng != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId('dropoff'),
-          position: _dropoffLatLng!,
-          infoWindow: const InfoWindow(title: 'Destination'),
+          point: _dropoffLatLng!,
+          width: 44,
+          height: 44,
+          child: const Tooltip(
+            message: 'Destination',
+            child: Icon(Icons.flag_rounded, color: Color(0xFF1F7A4D), size: 34),
+          ),
         ),
       );
     }
     if (_assignedDriverLatLng != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId('assigned-driver'),
-          position: _assignedDriverLatLng!,
-          infoWindow: InfoWindow(
-            title: _acceptedRide?.driverName ?? 'Your driver',
-            snippet: _acceptedRide?.driverVehicleNo ?? 'Driver location',
+          point: _assignedDriverLatLng!,
+          width: 48,
+          height: 48,
+          child: Tooltip(
+            message: _acceptedRide?.driverName ?? 'Your driver',
+            child: const Icon(Icons.local_taxi_rounded,
+                color: Color(0xFF1677C8), size: 38),
           ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueAzure,
-          ),
-          zIndexInt: 3,
         ),
       );
     }
@@ -1348,14 +1376,12 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
       final stop = _rideStops[index];
       markers.add(
         Marker(
-          markerId: MarkerId('stop-$index'),
-          position: LatLng(stop.latitude, stop.longitude),
-          infoWindow: InfoWindow(
-            title: 'Stop ${index + 1}',
-            snippet: stop.location,
-          ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueOrange,
+          point: LatLng(stop.latitude, stop.longitude),
+          width: 38,
+          height: 38,
+          child: Tooltip(
+            message: 'Stop ${index + 1}: ${stop.location}',
+            child: const Icon(Icons.circle, color: Color(0xFFF9A825), size: 22),
           ),
         ),
       );
@@ -1630,27 +1656,50 @@ class _HomeShellPageState extends ConsumerState<HomeShellPage> {
       ),
       body: Stack(
         children: [
-          GoogleMap(
-            initialCameraPosition:
-                CameraPosition(target: initialTarget, zoom: 15),
-            myLocationEnabled: true,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            markers: _buildMarkers(),
-            polylines: _buildPolylines(),
-            padding: EdgeInsets.only(
-              top: _acceptedRide != null ? 86 : 0,
-              bottom: _acceptedRide != null
-                  ? MediaQuery.sizeOf(context).height * 0.34
-                  : 0,
+          if ((_geoapifyApiKey ?? '').isNotEmpty)
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: initialTarget,
+                initialZoom: 15,
+                onMapReady: () {
+                  _mapReady = true;
+                  final target = _pendingMapTarget ?? _pickupLatLng;
+                  if (target != null) {
+                    _mapController.move(target, _pendingMapZoom ?? 16);
+                  }
+                },
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate:
+                      'https://maps.geoapify.com/v1/tile/osm-bright/{z}/{x}/{y}.png?apiKey=$_geoapifyApiKey',
+                  userAgentPackageName: 'com.getcoregroup.shilotauser',
+                ),
+                PolylineLayer(polylines: _buildPolylines()),
+                MarkerLayer(markers: _buildMarkers()),
+                const RichAttributionWidget(
+                  attributions: [
+                    TextSourceAttribution(
+                      '© OpenStreetMap contributors © Geoapify',
+                    ),
+                  ],
+                ),
+              ],
+            )
+          else
+            const ColoredBox(
+              color: Color(0xFFE7ECEA),
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Map configuration is loading. If it remains here, add GEOAPIFY_API_KEY to android/local.properties and rebuild.',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
             ),
-            onMapCreated: (controller) async {
-              _mapController = controller;
-              if (_pickupLatLng != null) {
-                await _moveCamera(_pickupLatLng!);
-              }
-            },
-          ),
           if (_acceptedRide == null && !_isFindingDriver)
             Positioned(
               top: 104,
