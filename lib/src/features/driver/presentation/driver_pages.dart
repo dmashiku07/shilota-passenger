@@ -1,10 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../../../core/storage/storage_providers.dart';
 import '../../../core/widgets/brand_logo.dart';
@@ -327,7 +327,6 @@ class DriverHomePage extends ConsumerStatefulWidget {
 
 class _DriverHomePageState extends ConsumerState<DriverHomePage> {
   final _scaffoldKey = GlobalKey<ScaffoldState>();
-  GoogleMapController? _mapController;
   Position? _position;
   bool _isOnline = false;
   bool _isLoadingLocation = true;
@@ -339,12 +338,6 @@ class _DriverHomePageState extends ConsumerState<DriverHomePage> {
     super.initState();
     unawaited(_bootstrapLocation());
     unawaited(_loadAdminData());
-  }
-
-  @override
-  void dispose() {
-    _mapController?.dispose();
-    super.dispose();
   }
 
   Future<void> _loadAdminData() async {
@@ -385,12 +378,6 @@ class _DriverHomePageState extends ConsumerState<DriverHomePage> {
             latitude: position.latitude,
             longitude: position.longitude,
           );
-      await _mapController?.animateCamera(
-        CameraUpdate.newLatLngZoom(
-          LatLng(position.latitude, position.longitude),
-          15,
-        ),
-      );
     } catch (error) {
       if (!mounted) {
         return;
@@ -425,7 +412,6 @@ class _DriverHomePageState extends ConsumerState<DriverHomePage> {
         isLoadingLocation: _isLoadingLocation,
         position: _position,
         onOnlineChanged: _setOnline,
-        onMapCreated: (controller) => _mapController = controller,
       ),
       const _DriverTripsTab(),
       const _DriverWalletTab(),
@@ -679,7 +665,6 @@ class _DriverDashboardTab extends ConsumerWidget {
     required this.isLoadingLocation,
     required this.position,
     required this.onOnlineChanged,
-    required this.onMapCreated,
   });
 
   final bool isOnline;
@@ -687,7 +672,6 @@ class _DriverDashboardTab extends ConsumerWidget {
   final bool isLoadingLocation;
   final Position? position;
   final ValueChanged<bool> onOnlineChanged;
-  final ValueChanged<GoogleMapController> onMapCreated;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -705,10 +689,7 @@ class _DriverDashboardTab extends ConsumerWidget {
               onOnlineChanged: onOnlineChanged,
             ),
             const SizedBox(height: 14),
-            _DriverMapCard(
-              position: position,
-              onMapCreated: onMapCreated,
-            ),
+            _DriverMapCard(position: position),
             const SizedBox(height: 14),
             if (snapshot.connectionState != ConnectionState.done)
               const LinearProgressIndicator(),
@@ -1082,39 +1063,86 @@ class _DriverStatusPanel extends StatelessWidget {
 class _DriverMapCard extends StatelessWidget {
   const _DriverMapCard({
     required this.position,
-    required this.onMapCreated,
   });
 
   final Position? position;
-  final ValueChanged<GoogleMapController> onMapCreated;
 
   @override
   Widget build(BuildContext context) {
-    final latLng = position == null
-        ? const LatLng(-6.7924, 39.2083)
-        : LatLng(position!.latitude, position!.longitude);
+    final latitude = position?.latitude ?? -6.7924;
+    final longitude = position?.longitude ?? 39.2083;
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
       child: SizedBox(
         height: 230,
-        child: GoogleMap(
-          initialCameraPosition: CameraPosition(
-            target: latLng,
-            zoom: 14,
-          ),
-          onMapCreated: onMapCreated,
-          myLocationEnabled: position != null,
-          myLocationButtonEnabled: true,
-          zoomControlsEnabled: false,
-          markers: {
-            Marker(
-              markerId: const MarkerId('driver'),
-              position: latLng,
-              infoWindow: const InfoWindow(title: 'Driver location'),
-            ),
-          },
-        ),
+        child: _GeoapifyDriverMap(latitude: latitude, longitude: longitude),
       ),
+    );
+  }
+}
+
+class _GeoapifyDriverMap extends StatefulWidget {
+  const _GeoapifyDriverMap({required this.latitude, required this.longitude});
+
+  final double latitude;
+  final double longitude;
+
+  @override
+  State<_GeoapifyDriverMap> createState() => _GeoapifyDriverMapState();
+}
+
+class _GeoapifyDriverMapState extends State<_GeoapifyDriverMap> {
+  static const MethodChannel _configChannel =
+      MethodChannel('shilota/app_config');
+  Future<String>? _keyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _keyFuture = _configChannel
+        .invokeMethod<String>('getGeoapifyApiKey')
+        .then((value) => value?.trim() ?? '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: _keyFuture,
+      builder: (context, snapshot) {
+        final key = snapshot.data ?? '';
+        if (key.isEmpty) {
+          return const ColoredBox(
+            color: Color(0xFFEAF3F1),
+            child: Center(child: Text('Map is being configured')),
+          );
+        }
+        final url =
+            Uri.https('maps.geoapify.com', '/v1/staticmap', <String, String>{
+          'style': 'osm-bright',
+          'width': '900',
+          'height': '460',
+          'center': 'lonlat:${widget.longitude},${widget.latitude}',
+          'zoom': '14',
+          'marker':
+              'lonlat:${widget.longitude},${widget.latitude};type:material;color:%232B8A5A;size:large',
+          'apiKey': key,
+        });
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Image.network(url.toString(),
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) =>
+                    const ColoredBox(color: Color(0xFFEAF3F1))),
+            const Positioned(
+              right: 8,
+              bottom: 6,
+              child: Text('© OpenStreetMap · Geoapify',
+                  style: TextStyle(fontSize: 9, color: Colors.black54)),
+            ),
+          ],
+        );
+      },
     );
   }
 }
