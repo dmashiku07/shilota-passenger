@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -31,9 +31,10 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
     r'^[23456789CFGHJMPQRVWX]{4,}\+[23456789CFGHJMPQRVWX]{2,}$',
     caseSensitive: false,
   );
-  static const MethodChannel _placesChannel = MethodChannel(
-    'shilota/places',
-  );
+  static const MethodChannel _configChannel =
+      MethodChannel('shilota/app_config');
+  static const double _darEsSalaamLat = -6.7924;
+  static const double _darEsSalaamLng = 39.2083;
   late final TextEditingController _pickupController;
   late final TextEditingController _dropoffController;
   late final FocusNode _pickupFocus;
@@ -50,7 +51,7 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
   List<_PlaceSuggestion> _suggestions = [];
   bool _isSearching = false;
   Timer? _debounce;
-  String _placesSessionToken = '';
+  String? _geoapifyApiKey;
   bool _suppressTextListener = false;
 
   @override
@@ -148,34 +149,40 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
     }
     setState(() => _isSearching = true);
     try {
-      if (_placesSessionToken.isEmpty) {
-        _placesSessionToken = _newPlacesSessionToken();
+      final apiKey = await _getGeoapifyApiKey();
+      final response = await Dio().get<Map<String, dynamic>>(
+        'https://api.geoapify.com/v1/geocode/autocomplete',
+        queryParameters: <String, dynamic>{
+          'text': trimmed,
+          'filter': 'countrycode:tz',
+          'bias': 'proximity:$_darEsSalaamLng,$_darEsSalaamLat',
+          'limit': 5,
+          'format': 'json',
+          'apiKey': apiKey,
+        },
+      );
+      final features =
+          (response.data?['results'] as List?) ?? const <dynamic>[];
+      if (!mounted) {
+        return;
       }
-      final response = await _placesChannel.invokeListMethod<dynamic>(
-            'autocomplete',
-            <String, dynamic>{
-              'query': trimmed,
-              'sessionToken': _placesSessionToken,
-            },
-          ) ??
-          const <dynamic>[];
-      if (!mounted) return;
-      final results = response
-          .take(6)
+      final results = features
           .map((dynamic item) {
             final map = _asStringKeyedMap(item);
             return _PlaceSuggestion(
-              placeId: map['placeId']?.toString(),
-              title: map['title']?.toString().trim() ?? '',
-              subtitle: map['subtitle']?.toString().trim().isNotEmpty == true
-                  ? map['subtitle'].toString().trim()
-                  : null,
+              placeId: map['place_id']?.toString(),
+              title: (map['name'] ?? map['formatted'])?.toString().trim() ?? '',
+              subtitle: map['formatted']?.toString().trim(),
+              latitude: (map['lat'] as num?)?.toDouble(),
+              longitude: (map['lon'] as num?)?.toDouble(),
             );
           })
           .where((item) => item.title.isNotEmpty)
           .toList();
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _suggestions = results;
         _isSearching = false;
@@ -201,13 +208,20 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
 
   bool get _isSearchActive => _suggestions.isNotEmpty || _isSearching;
 
-  String _newPlacesSessionToken() {
-    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    final random = math.Random.secure();
-    return List<String>.generate(
-      24,
-      (_) => alphabet[random.nextInt(alphabet.length)],
-    ).join();
+  Future<String> _getGeoapifyApiKey() async {
+    final cached = _geoapifyApiKey;
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+    final key =
+        (await _configChannel.invokeMethod<String>('getGeoapifyApiKey') ?? '')
+            .trim();
+    if (key.isEmpty) {
+      throw const _SelectLocationException(
+          'Geoapify is not configured. Add GEOAPIFY_API_KEY to android/local.properties.');
+    }
+    _geoapifyApiKey = key;
+    return key;
   }
 
   Map<String, dynamic> _asStringKeyedMap(dynamic value) {
@@ -243,40 +257,7 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
     if (suggestion.latitude != null && suggestion.longitude != null) {
       return suggestion;
     }
-    final placeId = suggestion.placeId?.trim() ?? '';
-    if (placeId.isEmpty) {
-      throw const _SelectLocationException('Place details are unavailable');
-    }
-    final data = await _placesChannel.invokeMapMethod<String, dynamic>(
-      'fetchPlaceDetails',
-      <String, dynamic>{
-        'placeId': placeId,
-        'sessionToken': _placesSessionToken,
-      },
-    );
-    final normalizedData = _asStringKeyedMap(data);
-    if (normalizedData.isEmpty) {
-      throw const _SelectLocationException('Unable to load place details');
-    }
-    final latitude = (normalizedData['latitude'] as num?)?.toDouble();
-    final longitude = (normalizedData['longitude'] as num?)?.toDouble();
-    if (latitude == null || longitude == null) {
-      throw const _SelectLocationException('Selected place has no coordinates');
-    }
-    final title = normalizedData['title']?.toString().trim().isNotEmpty == true
-        ? normalizedData['title'].toString().trim()
-        : suggestion.title;
-    final formattedAddress = normalizedData['subtitle']?.toString().trim();
-    final normalizedSubtitle =
-        formattedAddress != null && formattedAddress.isNotEmpty
-            ? formattedAddress
-            : suggestion.subtitle;
-    return suggestion.copyWith(
-      title: title,
-      subtitle: normalizedSubtitle,
-      latitude: latitude,
-      longitude: longitude,
-    );
+    throw const _SelectLocationException('Selected place has no coordinates');
   }
 
   Future<void> _useCurrentLocation() async {
@@ -433,7 +414,6 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
           _dropoffLatLng = LatLng(resolved.latitude!, resolved.longitude!);
         }
         _suggestions = [];
-        _placesSessionToken = '';
         _pickupActive = false;
       });
       _pickupFocus.unfocus();
@@ -462,7 +442,6 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
       }
       _suggestions = [];
       _pickupActive = false;
-      _placesSessionToken = '';
     });
     _pickupFocus.unfocus();
     _dropoffFocus.unfocus();
@@ -679,27 +658,28 @@ class _SelectLocationPageState extends ConsumerState<SelectLocationPage> {
   }
 
   Future<List<_PlaceSuggestion>> _searchStopSuggestions(String query) async {
-    if (_placesSessionToken.isEmpty) {
-      _placesSessionToken = _newPlacesSessionToken();
-    }
-    final response = await _placesChannel.invokeListMethod<dynamic>(
-          'autocomplete',
-          <String, dynamic>{
-            'query': query.trim(),
-            'sessionToken': _placesSessionToken,
-          },
-        ) ??
-        const <dynamic>[];
-    return response
-        .take(6)
+    final apiKey = await _getGeoapifyApiKey();
+    final response = await Dio().get<Map<String, dynamic>>(
+      'https://api.geoapify.com/v1/geocode/autocomplete',
+      queryParameters: <String, dynamic>{
+        'text': query.trim(),
+        'filter': 'countrycode:tz',
+        'bias': 'proximity:$_darEsSalaamLng,$_darEsSalaamLat',
+        'limit': 5,
+        'format': 'json',
+        'apiKey': apiKey,
+      },
+    );
+    final results = (response.data?['results'] as List?) ?? const <dynamic>[];
+    return results
         .map((dynamic item) {
           final map = _asStringKeyedMap(item);
           return _PlaceSuggestion(
-            placeId: map['placeId']?.toString(),
-            title: map['title']?.toString().trim() ?? '',
-            subtitle: map['subtitle']?.toString().trim().isNotEmpty == true
-                ? map['subtitle'].toString().trim()
-                : null,
+            placeId: map['place_id']?.toString(),
+            title: (map['name'] ?? map['formatted'])?.toString().trim() ?? '',
+            subtitle: map['formatted']?.toString().trim(),
+            latitude: (map['lat'] as num?)?.toDouble(),
+            longitude: (map['lon'] as num?)?.toDouble(),
           );
         })
         .where((item) => item.title.isNotEmpty)

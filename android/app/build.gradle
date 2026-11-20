@@ -13,6 +13,7 @@ if (localPropertiesFile.exists()) {
     }
 }
 def googleMapsApiKey = localProperties.getProperty("API_KEY", "")
+def geoapifyApiKey = localProperties.getProperty("GEOAPIFY_API_KEY", "")
 def keystoreProperties = new Properties()
 def keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
@@ -46,6 +47,7 @@ android {
         versionName = flutter.versionName
         manifestPlaceholders["API_KEY"] = googleMapsApiKey
         buildConfigField "String", "API_KEY", "\"${googleMapsApiKey}\""
+        buildConfigField "String", "GEOAPIFY_API_KEY", "\"${geoapifyApiKey}\""
     }
 
     signingConfigs {

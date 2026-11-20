@@ -58,6 +58,8 @@ class MainActivity : FlutterActivity() {
                 } catch (exception: Exception) {
                     result.success("")
                 }
+            } else if (call.method == "getGeoapifyApiKey") {
+                result.success(BuildConfig.GEOAPIFY_API_KEY.trim())
             } else {
                 result.notImplemented()
             }
